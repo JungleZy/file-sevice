@@ -12,7 +12,6 @@ use axum::{
 
 use std::{net::SocketAddr};
 use std::time::Duration;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::routers::file_api;
 use common::RespVO;
 use log::warn;
@@ -32,28 +31,14 @@ async fn fallback(uri: Uri) -> impl IntoResponse {
 #[tokio::main]
 pub async fn start(){
 
-  tracing_subscriber::registry()
-  .with(tracing_subscriber::EnvFilter::new(
-      std::env::var("RUST_LOG")
-          .unwrap_or_else(|_| "example_static_file_server=debug,tower_http=debug".into()),
-  ))
-  .with(tracing_subscriber::fmt::layer())
-  .init();
   let cors = CorsLayer::new().allow_methods(Any).allow_origin(Any).allow_headers(Any).max_age(Duration::from_secs(60) * 10);
   let app = Router::new()
-      // .nest("/static", get_service(ServeDir::new(".")).handle_error(|error: std::io::Error| async move {
-      //   (
-      //       StatusCode::INTERNAL_SERVER_ERROR,
-      //       format!("Unhandled internal error: {}", error),
-      //   )
-      // }))
       .nest("/api/file", file_api::routers())
-      // .merge(axum_extra::routing::SpaRouter::new("/assets", "."))
       .layer(cors)
       .fallback(fallback.into_service());
 
   let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
-  tracing::debug!("listening on {}", addr);
+  println!("listening on {}", addr);
   Server::bind(&addr)
     .serve(app.into_make_service())
     .await
