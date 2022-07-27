@@ -1,0 +1,27 @@
+[package]
+name = "file-service"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+common = {path = "./core/common"}
+#serde and json
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+axum = {version = "0.5", features = ["multipart","headers"] }
+axum-extra = { version="0", features = ["spa"] }
+tokio = { version = "1.0", features = ["full"] }
+tower-http = { version = "0.3", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+#log
+log = "0.4"
+fast_log = { version="1.5", features = ["lz4","zip", "gzip"] }
+percent-encoding = "2.1.0"
+rand = "0.8"
+
+#图片处理
+image = "0"

@@ -1,0 +1,18 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+path = "src/lib.rs"
+[dependencies]
+serde = { version="1", features = ["derive"] }
+serde_json = "1.0"
+axum ="0.5"
+tokio = { version="1", features = ["full"] }
+md5 = "0.7"
+rustflake = "0.1"
+
+rbatis = { version = "3.0", default-features = false, features = ["mysql", "runtime-async-std-rustls"] }
+rbson = "2.0"
