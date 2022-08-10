@@ -41,6 +41,8 @@ pub async fn file_upload(
     >,
     headers: HeaderMap
   ) -> impl IntoResponse {
+    let mut msg = "error".to_string();
+
     if let Some(field) = multipart.next_field().await.unwrap() {
       let name = field.name().unwrap().to_string();
       let file_name = field.file_name().unwrap().to_string();
@@ -52,12 +54,11 @@ pub async fn file_upload(
       if current_path.is_none() == false {
         upload_path = current_path.unwrap().to_str().unwrap();
       }
-      println!("current_path:{:?}", upload_path);
       let mut save_path =  SAVE_FILE_BASE_PATH.to_string();
       if upload_path != "" {
         save_path = format!("{}/{}", SAVE_FILE_BASE_PATH, upload_path);
       }
-      
+      // fs::create_dir_all(save_path.to_string()).unwrap();
       println!(
           "Length of `{}` (`{}`: `{}`) is {} bytes",
           name,
@@ -84,7 +85,7 @@ pub async fn file_upload(
         let fp = fs::read_dir(save_path.to_string());
 
         if fp.is_err() {
-            fs::create_dir(save_path.to_string());
+            fs::create_dir_all(save_path.to_string()).unwrap();
         }
         
         //辅助日志
@@ -92,11 +93,11 @@ pub async fn file_upload(
         //保存上传的文件
         tokio::fs::write(&save_filename, &data)
           .await
-          .map_err(|err| err.to_string());
+          .map_err(|err| msg = err.to_string());
 
         return RespVO::from(&format!("/{}/{}.{}",upload_path, rnd, ext_name)).resp_json();
       }
     }
-    let msg = "error".to_string();
+    
     return RespVO::from(&msg).resp_json();
 }

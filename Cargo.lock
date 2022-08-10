@@ -764,6 +764,7 @@ dependencies = [
  "percent-encoding",
  "rand",
  "serde",
+ "serde_derive",
  "serde_json",
  "tokio",
  "tower-http",
