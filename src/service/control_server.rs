@@ -1,7 +1,8 @@
+use std::borrow::Cow;
 use std::fs;
 use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap};
 use common::RespVO;
-use std::process::{Command,Stdio};
+use std::process::{Command, Output, Stdio};
 use std::os::windows::process::CommandExt;
 
 
@@ -45,9 +46,7 @@ pub  async fn server_info()-> impl IntoResponse{
 //读取磁盘信息
 fn get_disk_info() -> String {
 
-    let output = Command::new("cmd").creation_flags(0x08000000).arg("/c").arg(" wmic logicaldisk list brief")
-        .stdout(Stdio::piped()).output().expect("cmd exec error!");
-
+    let output = windows_cmd("wmic logicaldisk list brief");
     let disk_list = String::from_utf8_lossy(&output.stdout);
     let mut split = disk_list.split("\r\r\n");
     // println!("{:?}",split);
@@ -120,6 +119,13 @@ fn get_disk_info() -> String {
     res_json
 }
 
+
+//dos 命令
+fn windows_cmd(cmd: &str) -> Output {
+    let output = Command::new("cmd").creation_flags(0x08000000).arg("/c").arg(cmd)
+        .stdout(Stdio::piped()).output().expect("cmd exec error!");
+   return  output;
+}
 
 
 
