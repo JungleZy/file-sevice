@@ -12,7 +12,7 @@ use axum::{
 
 use std::{net::SocketAddr};
 use std::time::Duration;
-use crate::routers::file_api;
+use crate::routers::{file_api, control_api};
 use common::RespVO;
 use log::warn;
 use tower_http::cors::{Any, CorsLayer};
@@ -34,6 +34,8 @@ pub async fn start(){
   let cors = CorsLayer::new().allow_methods(Any).allow_origin(Any).allow_headers(Any).max_age(Duration::from_secs(60) * 10);
   let app = Router::new()
       .nest("/api/file", file_api::routers())
+      //监控台
+      .nest("/api/control", control_api::routers())
       .layer(cors)
       .fallback(fallback.into_service());
 
