@@ -41,8 +41,11 @@ pub async fn start(){
 
   let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
   println!("listening on {}", addr);
+
+
   Server::bind(&addr)
     .serve(app.into_make_service())
     .await
     .unwrap();
+
 }
