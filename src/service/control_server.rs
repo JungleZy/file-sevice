@@ -38,7 +38,7 @@ struct SystemInfo{
     //操作系统
     system_info:String,
     //内存大小
-    memory_size:String,
+    memory_size:u64,
     //rust 版本
     rust_version:String,
     //运行时长
@@ -54,7 +54,7 @@ impl SystemInfo {
         SystemInfo{
             cpu_name: "".to_string(),
             system_info: "x".to_string(),
-            memory_size: "".to_string(),
+            memory_size: 0,
             rust_version: "".to_string(),
             run_time: "".to_string(),
             server_version: "".to_string(),
@@ -174,12 +174,34 @@ fn get_server_info()->String{
     let cpu_number = &cpu_caption[cpu_caption.len()-2..];
     let os_info = get_os_info(cpu_number);
 
+    //获取内存大小
+    si.memory_size = get_memory_size();
+
     si.system_info.push_str(&os_info);
     si.cpu_name = cpu_name.to_string();
     si.current_disk = get_current_application_disk();
 
     serde_json::to_string(&si).unwrap()
 
+}
+
+//获取内存大小
+fn get_memory_size() -> u64 {
+    let output = windows_cmd("wmic memorychip list brief");
+    let cow = String::from_utf8_lossy(&output.stdout);
+    let x:Vec<&str> = cow.trim().split("\r\r\n").collect();
+    let mut total_size:u64 = 0;
+    for i in 0..x.len() {
+        if i !=0 {
+            let t:Vec<&str> = x.get(i)
+                .unwrap()
+                .split("  ")
+                .collect();
+            let size:u64 = t.get(0).unwrap().parse().unwrap();
+            total_size = total_size+size;
+        }
+    }
+    total_size /1024 / 1024 /1024
 }
 
 //读取os操作系统
