@@ -4,10 +4,12 @@ use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, htt
 use common::RespVO;
 use std::process::{Command, Output, Stdio};
 use std::os::windows::process::CommandExt;
+use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, ProcessExt, System as s_System, SystemExt};
 
 
 use serde::{Serialize, Deserialize};
 
+//磁盘信息
 #[derive(Serialize, Deserialize, Debug)]
 struct DiskDetail{
     name:String,
@@ -17,7 +19,6 @@ struct DiskDetail{
     ratio:f64,
 
 }
-
 impl DiskDetail {
     fn generate()->DiskDetail{
         DiskDetail{
@@ -48,7 +49,6 @@ struct SystemInfo{
     //当前磁盘
     current_disk:String,
 }
-
 impl SystemInfo {
      fn generate()->SystemInfo{
         SystemInfo{
@@ -57,12 +57,60 @@ impl SystemInfo {
             memory_size: 0,
             rust_version: "".to_string(),
             run_time: "".to_string(),
-            server_version: "".to_string(),
+            server_version: "1.0.0".to_string(),
             current_disk: "".to_string()
         }
 
     }
 
+}
+
+// 图表统计信息
+#[derive(Serialize, Deserialize, Debug)]
+struct ChartInfo {
+    rtmp_connect:u32,
+    http_connect:u32,
+    web_socket_connect:u32,
+    cpu_usage:u64,
+    net_send:u64,
+    net_received:u64,
+    memory_total:u64,
+    memory_used:u64,
+}
+impl ChartInfo {
+
+    fn generate()->ChartInfo{
+        ChartInfo{
+            rtmp_connect: 0,
+            http_connect: 0,
+            web_socket_connect: 0,
+            cpu_usage: 0,
+            net_send: 0,
+            net_received: 0,
+            memory_total: 0,
+            memory_used: 0
+        }
+    }
+
+}
+
+
+//监控台
+#[derive(Serialize, Deserialize, Debug)]
+struct ControlInfo {
+    server_info:Option<SystemInfo>,
+    char_info:Option<ChartInfo>,
+    disk_detail:Option<Vec<DiskDetail>>,
+}
+
+impl ControlInfo {
+    fn generate()->ControlInfo{
+        ControlInfo{
+            server_info: None,
+            char_info: None,
+            disk_detail: None
+        }
+    }
 }
 
 
@@ -76,14 +124,45 @@ impl SystemInfo {
 
 
 pub  async fn server_info()-> impl IntoResponse{
-    // let res_json = get_disk_info();
-    let res_json = get_server_info();
+    let disk_info = get_disk_info();
+    let server_info = get_server_info();
+    let chart_info = get_chart_info();
+    let mut control_info = ControlInfo::generate();
+    control_info.char_info  = Some(chart_info);
+    control_info.server_info = Some(server_info);
+    control_info.disk_detail = Some(disk_info);
 
-    return RespVO::from(&res_json).resp_json();
+    let ret = serde_json::to_string(&control_info).unwrap();
+
+    return RespVO::from(&ret).resp_json();
+}
+
+//获取图表各项统计信息
+fn get_chart_info()->ChartInfo{
+    let mut char_info = ChartInfo::generate();
+    let mut  sys = s_System::new_all();
+    sys.refresh_all();
+    //设置网络接收和发送
+    for (interface_name, data) in sys.networks() {
+        if interface_name == "WLAN"{
+            char_info.net_send  = data.transmitted();
+            char_info.net_received = data.received();
+        }
+    }
+    sys.refresh_all();
+    char_info.memory_total = sys.total_memory();
+    sys.refresh_all();
+    char_info.memory_used = sys.used_memory();
+    sys.refresh_all();
+    char_info.cpu_usage = sys.global_cpu_info().cpu_usage() as u64;;
+
+    println!("{:?}",char_info);
+    return char_info;
+
 }
 
 //读取磁盘信息
-fn get_disk_info() -> String {
+fn get_disk_info() -> Vec<DiskDetail> {
 
     let output = windows_cmd("wmic logicaldisk list brief");
     let disk_list = String::from_utf8_lossy(&output.stdout);
@@ -154,12 +233,11 @@ fn get_disk_info() -> String {
         }
     }
 
-    let res_json = serde_json::to_string(&ret).unwrap();
-    res_json
+    ret
 }
 
 //获取服务器信息
-fn get_server_info()->String{
+fn get_server_info()->SystemInfo{
     let mut si = SystemInfo::generate();
     let cpu_info = get_cpu_info();
     let cpu_option = cpu_info.split_once("*");
@@ -180,9 +258,24 @@ fn get_server_info()->String{
     si.system_info.push_str(&os_info);
     si.cpu_name = cpu_name.to_string();
     si.current_disk = get_current_application_disk();
+    si.rust_version = get_rust_version();
 
-    serde_json::to_string(&si).unwrap()
+    si
 
+}
+
+//获取rust版本
+fn get_rust_version()->String{
+    let output = windows_cmd("rustc --version");
+    //cargo 1.62.1 (a748cf5a3 2022-06-08)
+    let cow = String::from_utf8_lossy(&output.stdout);
+    let string = cow.to_string();
+    let x = string.split_once(" ")
+        .unwrap()
+        .1;
+    let i = x.find(" ").unwrap();
+    let v = &x[..i];
+    return  v.to_string();
 }
 
 //获取内存大小
