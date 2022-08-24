@@ -4,13 +4,15 @@ use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, htt
 use common::RespVO;
 use std::process::{Command, Output, Stdio};
 use std::os::windows::process::CommandExt;
+use chrono::Local;
 use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, ProcessExt, System as s_System, SystemExt};
 
 
 use serde::{Serialize, Deserialize};
+use http_server::INFO;
 
 //磁盘信息
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug,Clone)]
 struct DiskDetail{
     name:String,
     total:u64,
@@ -32,12 +34,12 @@ impl DiskDetail {
 }
 
 //服务器信息
-#[derive(Serialize, Deserialize, Debug)]
-struct SystemInfo{
+#[derive(Serialize, Deserialize, Debug,Clone)]
+pub struct SystemInfo{
     //cpu名称
     cpu_name:String,
     //操作系统
-    system_info:String,
+    pub(crate) system_info:String,
     //内存大小
     memory_size:u64,
     //rust 版本
@@ -66,7 +68,7 @@ impl SystemInfo {
 }
 
 // 图表统计信息
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug,Clone)]
 struct ChartInfo {
     rtmp_connect:u32,
     http_connect:u32,
@@ -96,7 +98,7 @@ impl ChartInfo {
 
 
 //监控台
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug,Clone)]
 struct ControlInfo {
     server_info:Option<SystemInfo>,
     char_info:Option<ChartInfo>,
@@ -121,6 +123,8 @@ impl ControlInfo {
 
 
 
+use crate::http::http_server;
+use crate::http::http_server::START_TIME;
 
 
 pub  async fn server_info()-> impl IntoResponse{
@@ -134,7 +138,7 @@ pub  async fn server_info()-> impl IntoResponse{
 
     let ret = serde_json::to_string(&control_info).unwrap();
 
-    return RespVO::from(&ret).resp_json();
+    return RespVO::from(&control_info).resp_json();
 }
 
 //获取图表各项统计信息
@@ -149,14 +153,12 @@ fn get_chart_info()->ChartInfo{
             char_info.net_received = data.received();
         }
     }
-    sys.refresh_all();
+    sys.refresh_memory();
     char_info.memory_total = sys.total_memory();
-    sys.refresh_all();
     char_info.memory_used = sys.used_memory();
-    sys.refresh_all();
-    char_info.cpu_usage = sys.global_cpu_info().cpu_usage() as u64;;
+    sys.refresh_cpu();
+    char_info.cpu_usage = sys.global_cpu_info().cpu_usage() as u64;
 
-    println!("{:?}",char_info);
     return char_info;
 
 }
@@ -167,10 +169,8 @@ fn get_disk_info() -> Vec<DiskDetail> {
     let output = windows_cmd("wmic logicaldisk list brief");
     let disk_list = String::from_utf8_lossy(&output.stdout);
     let mut split = disk_list.split("\r\r\n");
-    // println!("{:?}",split);
     let mut flag = true;
     let mut num = 1;
-
     let mut ret = Vec::new();
 
     while flag {
@@ -221,7 +221,9 @@ fn get_disk_info() -> Vec<DiskDetail> {
 
                     disk_detail.used = disk_detail.total - disk_detail.usable;
 
-                    disk_detail.ratio = (disk_detail.used as f64 / disk_detail.total as f64 * 100.0);
+                    let ratio = (disk_detail.used as f64 / disk_detail.total as f64 * 100.0).to_string();
+                    let x1:f64 = ratio[0..5].parse().unwrap();
+                    disk_detail.ratio = x1 as f64;
 
                     ret.push(disk_detail);
                     // println!("{:?}",disk_detail);
@@ -237,7 +239,7 @@ fn get_disk_info() -> Vec<DiskDetail> {
 }
 
 //获取服务器信息
-fn get_server_info()->SystemInfo{
+pub  fn get_server_info() ->SystemInfo{
     let mut si = SystemInfo::generate();
     let cpu_info = get_cpu_info();
     let cpu_option = cpu_info.split_once("*");
@@ -250,12 +252,29 @@ fn get_server_info()->SystemInfo{
         .unwrap().0;
 
     let cpu_number = &cpu_caption[cpu_caption.len()-2..];
-    let os_info = get_os_info(cpu_number);
+
+    unsafe {
+        match &INFO {
+            Some(s) => {
+                let temp = s.to_string();
+                si.system_info = temp;
+            }
+            None => {
+                let os_info = get_os_info(cpu_number);
+                &si.system_info.push_str(&os_info);
+                let mut temp: String = String::from("x");
+                temp.push_str(&os_info);
+                INFO = Some(temp);
+            }
+        }
+        //运行时长
+        si.run_time = (Local::now().timestamp_millis() - START_TIME).to_string();
+    }
+
 
     //获取内存大小
     si.memory_size = get_memory_size();
 
-    si.system_info.push_str(&os_info);
     si.cpu_name = cpu_name.to_string();
     si.current_disk = get_current_application_disk();
     si.rust_version = get_rust_version();
@@ -381,8 +400,6 @@ fn get_cpu_info()->String{
                             index = i as i32;
                         }
                     }
-
-
                 }else {
                     let split = s.split("  ");
                     let mut values = Vec::new();
@@ -440,6 +457,8 @@ fn windows_cmd(command: &str) -> Output {
         .stdout(Stdio::piped()).output().expect("cmd exec error!");
    return  output;
 }
+
+
 
 
 

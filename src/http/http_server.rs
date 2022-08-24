@@ -12,10 +12,16 @@ use axum::{
 
 use std::{net::SocketAddr};
 use std::time::Duration;
+use chrono::Local;
 use crate::routers::{file_api, control_api};
 use common::RespVO;
 use log::warn;
 use tower_http::cors::{Any, CorsLayer};
+use crate::service::control_server;
+use crate::service::control_server::SystemInfo;
+
+pub static mut INFO:Option<String> = None;
+pub static mut START_TIME:i64 = 0;
 
 async fn fallback(uri: Uri) -> impl IntoResponse {
   let msg = format!("资源不存在：{}", uri);
@@ -40,8 +46,14 @@ pub async fn start(){
       .fallback(fallback.into_service());
 
   let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
+  //加载
+  let server_info = control_server::get_server_info();
   println!("listening on {}", addr);
-
+  // println!("{:?}",server_info.system_info);
+  unsafe {
+    INFO = Some(server_info.system_info);
+    START_TIME = Local::now().timestamp_millis();
+  }
 
   Server::bind(&addr)
     .serve(app.into_make_service())
