@@ -18,7 +18,7 @@ use common::RespVO;
 use log::warn;
 use tower_http::cors::{Any, CorsLayer};
 use crate::service::control_server;
-use crate::service::control_server::SystemInfo;
+use crate::service::control_server::{read_os_info_to_send_socket, SystemInfo};
 
 pub static mut INFO:Option<String> = None;
 pub static mut START_TIME:i64 = 0;
@@ -54,6 +54,9 @@ pub async fn start(){
     INFO = Some(server_info.system_info);
     START_TIME = Local::now().timestamp_millis();
   }
+
+  //开启定时任务，查询pc信息并推送
+  tokio::spawn(read_os_info_to_send_socket());
 
   Server::bind(&addr)
     .serve(app.into_make_service())

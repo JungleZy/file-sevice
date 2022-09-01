@@ -11,13 +11,12 @@ use axum::{
     routing::{get_service},
 };
 use tower_http::{services::ServeDir};
-use crate::service::control_server::{
-    server_info
-};
+use crate::service::control_server::{GLOBAL_SOCKET, server_info, server_info_socket};
 
 
 
 pub fn init_router() -> Router {
     Router::new()
         .route("/info", get(server_info))
+        .route("/ws",get(|socket,arg|server_info_socket(socket,arg,GLOBAL_SOCKET.lock().unwrap().clone())))
 }

@@ -1,15 +1,36 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs;
-use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap};
+use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, TypedHeader, headers};
 use common::RespVO;
 use std::process::{Command, Output, Stdio};
 use std::os::windows::process::CommandExt;
+
+use axum::{Error, extract::ws::{WebSocket, Message}};
+use axum::response::Response;
 use chrono::Local;
 use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, ProcessExt, System as s_System, SystemExt};
 
 
+
 use serde::{Serialize, Deserialize};
 use http_server::INFO;
+
+use tokio::sync::broadcast;
+// socket 管理器
+pub struct AppState {
+    user_set: Mutex<HashSet<String>>,
+    tx: broadcast::Sender<String>,
+}
+
+impl AppState {
+    pub fn new() -> Arc<AppState> {
+        let user_set = Mutex::new(HashSet::new());
+        let (tx, _rx) = broadcast::channel(100);
+        Arc::new(AppState { user_set, tx })
+    }
+}
+
 
 //磁盘信息
 #[derive(Serialize, Deserialize, Debug,Clone)]
@@ -96,6 +117,12 @@ impl ChartInfo {
 
 }
 
+#[derive(Serialize, Deserialize, Debug,Clone)]
+pub struct WebSocketParam{
+    id:String
+}
+
+
 
 //监控台
 #[derive(Serialize, Deserialize, Debug,Clone)]
@@ -140,6 +167,97 @@ pub  async fn server_info()-> impl IntoResponse{
 
     return RespVO::from(&control_info).resp_json();
 }
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
+
+use axum::extract::{Query, WebSocketUpgrade};
+use once_cell::sync::{Lazy, OnceCell};
+use futures::{sink::SinkExt, stream::{StreamExt, SplitSink, SplitStream}};
+use tokio::sync::broadcast::Receiver;
+
+//初始化全局socket线程管理器
+pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<AppState>>> = Lazy::new(||{
+    let app_state = AppState::new();
+    Mutex::new(app_state)
+});
+
+//WebSocket处理函数
+pub async fn server_info_socket(ws: WebSocketUpgrade,args:Query<HashMap<String,String>>,stat:Arc<AppState>)->impl IntoResponse{
+
+    ws.on_upgrade(|socket| handle_socket(socket,args,stat))
+
+}
+
+async fn handle_socket(mut socket: WebSocket,args:Query<HashMap<String,String>>,stat:Arc<AppState>) {
+    let id: &String = args.0.get("id").unwrap();
+    let (mut sender, mut receiver) = socket.split();
+
+    stat.user_set.lock().unwrap().insert(id.clone());
+
+    let mut read_tack = tokio::spawn(read(receiver, id.clone()));
+    let sd = stat.tx.subscribe();
+
+    //发送消息
+    let mut write_tack = tokio::spawn(write(sender, sd));
+
+    // 当发送消息失败或者离开页面， 阻塞方法
+    tokio::select! {
+         _ = (&mut write_tack) => read_tack.abort(),
+        _ = (&mut read_tack) => write_tack.abort(),
+    };
+}
+
+
+async fn read(mut receiver: SplitStream<WebSocket>,id:String) {
+
+    // ...
+    while let Some(Ok(message))=receiver.next().await{
+        match message {
+            Message::Text(msg) => {
+                println!("{}",msg);
+            }
+            Message::Close(c) => {
+                //移出socket
+                GLOBAL_SOCKET.lock().unwrap().user_set.lock().unwrap().remove(&*id);
+            }
+            _ => {
+                println!("其它消息")
+            }
+        }
+    }
+}
+
+async fn write(mut sender: SplitSink<WebSocket, Message>, mut sd: Receiver<String>) {
+        while let Ok(message) = sd.recv().await{
+            if sender.send(Message::Text(message)).await.is_err(){
+                break;
+            }
+        }
+}
+
+
+//定时读取PC信息并发送
+pub async fn read_os_info_to_send_socket(){
+    loop {
+        let disk_info = get_disk_info();
+        let server_info = get_server_info();
+        let chart_info = get_chart_info();
+        let mut control_info = ControlInfo::generate();
+        control_info.char_info = Some(chart_info);
+        control_info.server_info = Some(server_info);
+        control_info.disk_detail = Some(disk_info);
+        let ret = serde_json::to_string(&control_info).unwrap();
+        if GLOBAL_SOCKET.lock().unwrap().user_set.lock().unwrap().len() > 0{
+            GLOBAL_SOCKET.lock().unwrap().tx.send(ret);
+        }
+        //停止2秒钟
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
 
 //获取图表各项统计信息
 fn get_chart_info()->ChartInfo{

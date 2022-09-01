@@ -5,5 +5,5 @@ mod service;
 
 
 fn main() {
-    unsafe { http::http_server::start(); }
+    http::http_server::start();
 }
