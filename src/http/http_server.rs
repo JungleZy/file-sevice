@@ -18,7 +18,7 @@ use common::RespVO;
 use log::warn;
 use tower_http::cors::{Any, CorsLayer};
 use crate::service::control_server;
-use crate::service::control_server::{read_os_info_to_send_socket, SystemInfo};
+use crate::service::control_server::{read_os_info_to_send_socket};
 
 pub static mut INFO:Option<String> = None;
 pub static mut START_TIME:i64 = 0;

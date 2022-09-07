@@ -69,8 +69,8 @@ pub async fn file_upload(
         println!("filename:{},content_type:{}", save_filename, content_type);
         //保存上传的文件
         tokio::fs::write(&save_filename, &data)
-          .await
-          .map_err(|err| msg = err.to_string());
+            .await
+            .map_err(|err| msg = err.to_string());
 
         return RespVO::from(&format!("/{}/{}.{}",upload_path, rnd, ext_name)).resp_json();
       }

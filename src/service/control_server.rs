@@ -1,159 +1,39 @@
-use std::borrow::Cow;
+#![allow(unused_variables)] //允许未使用的变量
+#![allow(dead_code)] //允许未使用的代码
+#![allow(unused_must_use)]
+#[warn(unused_mut)]
+
+
 use std::collections::HashMap;
-use std::fs;
-use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, TypedHeader, headers};
+use axum::{response::IntoResponse};
 use common::RespVO;
 use std::process::{Command, Output, Stdio};
 use std::os::windows::process::CommandExt;
 
-use axum::{Error, extract::ws::{WebSocket, Message}};
-use axum::response::Response;
+use axum::{extract::ws::{WebSocket, Message}};
+
 use chrono::Local;
-use sysinfo::{CpuExt, DiskExt, NetworkExt, NetworksExt, ProcessExt, System as s_System, SystemExt};
-
-
-
-use serde::{Serialize, Deserialize};
+use sysinfo::{CpuExt, NetworkExt, System as s_System, SystemExt};
 use http_server::INFO;
-
-use tokio::sync::broadcast;
-// socket 管理器
-pub struct AppState {
-    user_set: Mutex<HashSet<String>>,
-    tx: broadcast::Sender<String>,
-}
-
-impl AppState {
-    pub fn new() -> Arc<AppState> {
-        let user_set = Mutex::new(HashSet::new());
-        let (tx, _rx) = broadcast::channel(100);
-        Arc::new(AppState { user_set, tx })
-    }
-}
-
-
-//磁盘信息
-#[derive(Serialize, Deserialize, Debug,Clone)]
-struct DiskDetail{
-    name:String,
-    total:u64,
-    usable:u64,
-    used:u64,
-    ratio:f64,
-
-}
-impl DiskDetail {
-    fn generate()->DiskDetail{
-        DiskDetail{
-            name: "".to_string(),
-            total: 0,
-            usable: 0,
-            used:0,
-            ratio:0.0,
-        }
-    }
-}
-
-//服务器信息
-#[derive(Serialize, Deserialize, Debug,Clone)]
-pub struct SystemInfo{
-    //cpu名称
-    cpu_name:String,
-    //操作系统
-    pub(crate) system_info:String,
-    //内存大小
-    memory_size:u64,
-    //rust 版本
-    rust_version:String,
-    //运行时长
-    run_time:String,
-    //服务器版本
-    server_version:String,
-    //当前磁盘
-    current_disk:String,
-}
-impl SystemInfo {
-     fn generate()->SystemInfo{
-        SystemInfo{
-            cpu_name: "".to_string(),
-            system_info: "x".to_string(),
-            memory_size: 0,
-            rust_version: "".to_string(),
-            run_time: "".to_string(),
-            server_version: "1.0.0".to_string(),
-            current_disk: "".to_string()
-        }
-
-    }
-
-}
-
-// 图表统计信息
-#[derive(Serialize, Deserialize, Debug,Clone)]
-struct ChartInfo {
-    rtmp_connect:u32,
-    http_connect:u32,
-    web_socket_connect:u32,
-    cpu_usage:u64,
-    net_send:u64,
-    net_received:u64,
-    memory_total:u64,
-    memory_used:u64,
-}
-impl ChartInfo {
-
-    fn generate()->ChartInfo{
-        ChartInfo{
-            rtmp_connect: 0,
-            http_connect: 0,
-            web_socket_connect: 0,
-            cpu_usage: 0,
-            net_send: 0,
-            net_received: 0,
-            memory_total: 0,
-            memory_used: 0
-        }
-    }
-
-}
-
-#[derive(Serialize, Deserialize, Debug,Clone)]
-pub struct WebSocketParam{
-    id:String
-}
-
-
-
-//监控台
-#[derive(Serialize, Deserialize, Debug,Clone)]
-struct ControlInfo {
-    server_info:Option<SystemInfo>,
-    char_info:Option<ChartInfo>,
-    disk_detail:Option<Vec<DiskDetail>>,
-}
-
-impl ControlInfo {
-    fn generate()->ControlInfo{
-        ControlInfo{
-            server_info: None,
-            char_info: None,
-            disk_detail: None
-        }
-    }
-}
-
-
-/*pub async fn file_info() -> impl IntoResponse {
-    let s = "File Service".to_string();
-    return RespVO::from(&s).resp_json();
-}*/
-
-
-
 use crate::http::http_server;
 use crate::http::http_server::START_TIME;
 
+use std::{
+    sync::{Arc, Mutex},
+};
+use axum::extract::{Query, WebSocketUpgrade};
+use once_cell::sync::{Lazy};
+use futures::{sink::SinkExt, stream::{StreamExt, SplitSink, SplitStream}};
+use tokio::sync::broadcast::Receiver;
+use crate::entity::control_entity::{AppState, ControlInfo, ChartInfo, DiskDetail, SystemInfo};
 
+//初始化全局socket线程管理器
+pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<AppState>>> = Lazy::new(||{
+    let app_state = AppState::new();
+    Mutex::new(app_state)
+});
+
+//http 接口
 pub  async fn server_info()-> impl IntoResponse{
     let disk_info = get_disk_info();
     let server_info = get_server_info();
@@ -163,26 +43,10 @@ pub  async fn server_info()-> impl IntoResponse{
     control_info.server_info = Some(server_info);
     control_info.disk_detail = Some(disk_info);
 
-    let ret = serde_json::to_string(&control_info).unwrap();
+    //let ret = serde_json::to_string(&control_info).unwrap();
 
     return RespVO::from(&control_info).resp_json();
 }
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
-
-use axum::extract::{Query, WebSocketUpgrade};
-use once_cell::sync::{Lazy, OnceCell};
-use futures::{sink::SinkExt, stream::{StreamExt, SplitSink, SplitStream}};
-use tokio::sync::broadcast::Receiver;
-
-//初始化全局socket线程管理器
-pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<AppState>>> = Lazy::new(||{
-    let app_state = AppState::new();
-    Mutex::new(app_state)
-});
 
 //WebSocket处理函数
 pub async fn server_info_socket(ws: WebSocketUpgrade,args:Query<HashMap<String,String>>,stat:Arc<AppState>)->impl IntoResponse{
@@ -192,8 +56,21 @@ pub async fn server_info_socket(ws: WebSocketUpgrade,args:Query<HashMap<String,S
 }
 
 async fn handle_socket(mut socket: WebSocket,args:Query<HashMap<String,String>>,stat:Arc<AppState>) {
+
+    if let None = args.0.get("id"){
+        let err = common::error::Error::E(String::from("请传入ID"));
+        let error:RespVO<String> = RespVO::from_error(&err);
+        let msg = serde_json::to_string(&error).unwrap();
+        //发送错误提示
+        socket.send(Message::Text(msg))
+            .await;
+        return;
+    }
     let id: &String = args.0.get("id").unwrap();
-    let (mut sender, mut receiver) = socket.split();
+    //校验id是否已存在，如已存在则将前者踢出
+    //check_id(id);
+
+    let ( sender, receiver) = socket.split();
 
     stat.user_set.lock().unwrap().insert(id.clone());
 
@@ -208,6 +85,11 @@ async fn handle_socket(mut socket: WebSocket,args:Query<HashMap<String,String>>,
          _ = (&mut write_tack) => read_tack.abort(),
         _ = (&mut read_tack) => write_tack.abort(),
     };
+}
+
+
+fn check_id(id: &String) {
+    //判断
 }
 
 
@@ -249,7 +131,10 @@ pub async fn read_os_info_to_send_socket(){
         control_info.char_info = Some(chart_info);
         control_info.server_info = Some(server_info);
         control_info.disk_detail = Some(disk_info);
-        let ret = serde_json::to_string(&control_info).unwrap();
+        // let ret = serde_json::to_string(&control_info).unwrap();
+        let vo = RespVO::from(&control_info);
+        let ret = serde_json::to_string(&vo).unwrap();
+
         if GLOBAL_SOCKET.lock().unwrap().user_set.lock().unwrap().len() > 0{
             GLOBAL_SOCKET.lock().unwrap().tx.send(ret);
         }
@@ -297,7 +182,7 @@ fn get_disk_info() -> Vec<DiskDetail> {
                 if num != 1 && s != "" {
                     let mut disk_detail = DiskDetail::generate();
 
-                    let mut info = ["".to_string(), "".to_string(), "".to_string(), "".to_string()];
+                    let  info = ["".to_string(), "".to_string(), "".to_string(), "".to_string()];
                     let mut vec = Vec::new();
 
                     // C:        3          21034897408                127044808704  Windows
@@ -450,10 +335,10 @@ fn get_os_info(cpu_number: &str) ->String{
                 //操作系统位数
                 if s.0 == "System Type" {
                     if s.1.trim() == "x64-based PC"{
-                        win_type = ("_win64_");
+                        win_type = "_win64_";
 
                     }else {
-                        win_type= ("_win32_");
+                        win_type= "_win32_";
                     }
                 }
                 //版本信息

@@ -2,15 +2,12 @@
 #![allow(dead_code)] //允许未使用的代码
 #![allow(unused_must_use)]
 
+
 use axum::{
-    routing::{get,post},
+    routing::{get},
     Router,
-    http::{
-        StatusCode
-    },
-    routing::{get_service},
 };
-use tower_http::{services::ServeDir};
+
 use crate::service::control_server::{GLOBAL_SOCKET, server_info, server_info_socket};
 
 
