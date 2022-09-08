@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast};
 
 use serde::{Serialize, Deserialize};
 
