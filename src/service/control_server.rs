@@ -58,8 +58,8 @@ pub async fn server_info_socket(ws: WebSocketUpgrade,args:Query<HashMap<String,S
 async fn handle_socket(mut socket: WebSocket,args:Query<HashMap<String,String>>,stat:Arc<AppState>) {
 
     if let None = args.0.get("id"){
-        let err = common::error::Error::E(String::from("请传入ID"));
-        let error:RespVO<String> = RespVO::from_error(&err);
+        let err =String::from("请传入ID");
+        let error:RespVO<String> = RespVO::from_error(err,String::from(""));
         let msg = serde_json::to_string(&error).unwrap();
         //发送错误提示
         socket.send(Message::Text(msg))

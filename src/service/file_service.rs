@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::time::UNIX_EPOCH;
-use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap};
+use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, Json};
 use axum::extract::Query;
 use common::RespVO;
 use rand::random;
 use crate::entity::file_entity::FileEntity;
+use crate::entity::query::file_query::RemoveFileQuery;
 
 const SAVE_FILE_BASE_PATH: &str = "./file";
 
@@ -127,4 +128,32 @@ pub async fn file_upload(
     }
     
     return RespVO::from(&msg).resp_json();
+}
+
+
+//删除文件夹或文件 path:&str,is_file:bool
+pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoResponse{
+  let mut full_path = SAVE_FILE_BASE_PATH.to_string();
+  full_path.push_str("/");
+  full_path.push_str(query.path.as_str());
+
+  let is_file = query.is_file;
+  let ok:String = "ok".to_string();
+  //删除文件
+  if is_file{
+    let result = fs::remove_file(full_path);
+    if let Err(err) = result{
+      let msg = err.to_string();
+      return RespVO::from_error(msg,String::from("")).resp_json();
+    }
+  }
+  //     删除文件夹
+  else {
+    let result = fs::remove_dir_all(full_path);
+    if let Err(e) = result{
+      let msg = e.to_string();
+      return RespVO::from_error(msg,String::from("")).resp_json();
+    }
+  }
+  return  RespVO::from(&ok).resp_json();
 }

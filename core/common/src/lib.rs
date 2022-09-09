@@ -43,11 +43,11 @@ where
         }
     }
 
-    pub fn from_error(arg: &Error) -> Self {
+    pub fn from_error(arg: String,data:T) -> Self {
         Self {
             code: Some(CODE_FAIL),
             msg: Some(arg.to_string()),
-            data: None,
+            data: Some(data.clone()),
         }
     }
 
