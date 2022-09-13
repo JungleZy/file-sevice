@@ -68,6 +68,17 @@ where
             .body(Body::from(self.to_string()))
             .unwrap()
     }
+
+    /*//文件下载
+    pub fn resp_file(arg:T) -> Response<Body>{
+        Self {
+            code: Some(CODE_SUCCESS),
+            msg: None,
+            data: Some(arg.clone()),
+        };
+        let data:Vec<u8> = arg;
+
+    }*/
 }
 
 impl<T> ToString for RespVO<T>

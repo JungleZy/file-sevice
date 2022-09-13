@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::time::UNIX_EPOCH;
 use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, Json};
+use axum::body::Body;
 use axum::extract::Query;
+use axum::http::Response;
 use common::RespVO;
 use rand::random;
 use crate::entity::file_entity::FileEntity;
@@ -156,4 +158,40 @@ pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoR
     }
   }
   return  RespVO::from(&ok).resp_json();
+}
+
+
+//下载文件
+pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl IntoResponse {
+  let name = file_name.0.get("fileName");
+  if let None = name{
+    return  RespVO::from_error(String::from("请传入下载文件路径名称"),String::from(" ")).resp_json();
+  }
+  let name = name.unwrap();
+  let mut file_name = String::from("attachment;filename=");
+  if name.contains("/"){
+    let v:Vec<&str> = name.rsplit("/").collect();
+    let x = v.get(0).unwrap();
+    println!("{:?}",v);
+    file_name.push_str(x);
+  }else {
+    file_name.push_str(name);
+  }
+  let mut file_path = String::from(SAVE_FILE_BASE_PATH.clone());
+  file_path.push_str("/");
+  file_path.push_str(name);
+  let result = fs::read(file_path);
+  if let Err(msg) = result{
+    return RespVO::from_error(msg.to_string(),String::from(" ")).resp_json();
+  }
+  let data = result.ok().unwrap();
+
+
+  Response::builder()
+      .extension(||{})
+      .header("Content-Disposition",file_name)
+      .header("Content-Type","application/octet-stream")
+      .body(Body::from(data))
+      .unwrap()
+
 }
