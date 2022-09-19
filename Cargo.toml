@@ -33,3 +33,7 @@ sysinfo = "0.25.2"
 
 futures = "*"
 once_cell = "1.13.1"
+
+#压缩处理
+zip = "0.6.2"
+walkdir = "2.3.2"
