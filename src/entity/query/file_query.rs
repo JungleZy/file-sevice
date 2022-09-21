@@ -16,3 +16,13 @@ pub struct CompressedFilesParam{
     //压缩的文件名
     pub zip_name:String,
 }
+
+
+//压缩文件参数
+#[derive(Deserialize)]
+pub struct UnCompressedFileParam{
+    //目录
+    pub path:String,
+    //文件名称
+    pub zip_name:String,
+}

@@ -1,7 +1,8 @@
+
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{copy, Read, Seek, Write};
 use std::path::Path as SPath;
 use std::time::UNIX_EPOCH;
 use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, Json};
@@ -9,11 +10,13 @@ use axum::body::Body;
 use axum::extract::Query;
 use axum::http::Response;
 use common::RespVO;
+use futures::future::err;
 use rand::random;
 use walkdir::{DirEntry, WalkDir};
+use zip::result::ZipResult;
 use zip::write::FileOptions;
 use crate::entity::file_entity::FileEntity;
-use crate::entity::query::file_query::{CompressedFilesParam, RemoveFileQuery};
+use crate::entity::query::file_query::{CompressedFilesParam, RemoveFileQuery, UnCompressedFileParam};
 
 const SAVE_FILE_BASE_PATH: &str = "./file";
 
@@ -203,10 +206,7 @@ pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl Int
 
 
 //压缩文件
-pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl IntoResponse{
-
-  let ok = String::from("压缩完成");
-
+pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl IntoResponse {
   let mut path = SAVE_FILE_BASE_PATH.to_string();
   path.push_str("/");
   path.push_str(param.path.as_str());
@@ -215,23 +215,43 @@ pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl Into
   target_path.push_str("/");
   target_path.push_str(param.zip_name.as_str());
   target_path.push_str(".zip");
+  return compress_dir(SPath::new(path.as_str()), SPath::new(target_path.as_str()), param.files);
+}
 
-  compress_dir(SPath::new(path.as_str()),SPath::new(target_path.as_str()),param.files);
 
-  return  RespVO::from(&ok).resp_json();
+//解压
+pub async fn uncompressed_file(Json(param):Json<UnCompressedFileParam>)->impl IntoResponse{
+  let ok = String::from("解压完成");
+  let mut zip_path = SAVE_FILE_BASE_PATH.to_string();
+  zip_path.push_str("/");
+  zip_path.push_str(param.path.as_str());
+  zip_path.push_str("/");
+  zip_path.push_str(param.zip_name.as_str());
+  let mut compressed_path = SAVE_FILE_BASE_PATH.to_string();
+  compressed_path.push_str("/");
+  compressed_path.push_str(param.path.as_str());
+  return extract(SPath::new(zip_path.as_str()),SPath::new(compressed_path.as_str()));
+
 }
 
 /// 压缩文件夹
 /// test文件夹下有a.jpg和b.txt 两个文件
 /// 压缩成test.zip文件
-fn compress_dir(src_dir: &SPath, target: &SPath,files:Vec<String>) {
+fn compress_dir(src_dir: &SPath, target: &SPath,files:Vec<String>)->Response<Body> {
+  let ok = String::from("压缩完成");
+  if let Err(e) = std::fs::File::create(target){
+    return RespVO::from_error(e.to_string(),String::from("")).resp_json();
+  }
   let zipfile = std::fs::File::create(target).unwrap();
   let dir = WalkDir::new(src_dir);
-  /*let filter = dir.into_iter().filter_map(|f| f.ok())
-      .filter(|f| f.file_type().is_file() && files.contains(&f.file_name().to_str().unwrap().to_string()));*/
-
   let result = zip_dir(&mut dir.into_iter().filter_map(|f| f.ok())
-      .filter(|f| f.file_type().is_file() && files.contains(&f.file_name().to_str().unwrap().to_string())), src_dir.to_str().unwrap(), zipfile);
+      .filter(|f| files.contains(&f.file_name().to_str().unwrap().to_string())), src_dir.to_str().unwrap(), zipfile);
+
+  if let Err(e) = result{
+
+    return RespVO::from_error(e.to_string(),String::from("")).resp_json();
+  }
+  return RespVO::from(&ok).resp_json();
 
 }
 
@@ -264,4 +284,45 @@ fn zip_dir<T>(it: &mut dyn Iterator<Item=DirEntry>, prefix: &str, writer: T) -> 
   }
   zip.finish()?;
   Result::Ok(())
+}
+
+
+///解压
+/// test.zip文件解压到d:/test文件夹下
+///
+fn extract(test: &SPath, mut target: &SPath)->Response<Body> {
+  let ok = String::from("解压完成");
+  if let Err(e)=std::fs::File::open(&test){
+    let mut msg = e.to_string();
+    msg.push_str(test.to_str().unwrap());
+    return RespVO::from_error(msg,String::from("")).resp_json();
+  }
+  let zipfile = std::fs::File::open(&test).unwrap();
+  let mut zip = zip::ZipArchive::new(zipfile).unwrap();
+
+/*  if !target.exists() {
+    fs::create_dir_all(target).map_err(|e| {
+      println!("{}", e);
+    });
+  }*/
+  for i in 0..zip.len() {
+    let mut file = zip.by_index(i).unwrap();
+    println!("Filename: {} {:?}", file.name(), file.mangled_name());
+    if file.is_dir() {
+      //println!("file utf8 path {:?}", file.name_raw());//文件名编码,在windows下用winrar压缩的文件夹，中文文夹件会码(发现文件名是用操作系统本地编码编码的，我的电脑就是GBK),本例子中的压缩的文件再解压不会出现乱码
+      let target = target.join(SPath::new(&file.name().replace("\\", "")));
+      fs::create_dir_all(target).unwrap();
+    } else {
+      let file_path = target.join(SPath::new(file.name()));
+      let mut target_file = if !file_path.exists() {
+        println!("file path {}", file_path.to_str().unwrap());
+        fs::File::create(file_path).unwrap()
+      } else {
+        fs::File::open(file_path).unwrap()
+      };
+      copy(&mut file, &mut target_file);
+      // target_file.write_all(file.read_bytes().into());
+    }
+  }
+  return RespVO::from(&ok).resp_json();
 }
