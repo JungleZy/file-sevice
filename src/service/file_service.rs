@@ -1,24 +1,38 @@
-
+#![allow(unused_variables)] //允许未使用的变量
+#![allow(dead_code)] //允许未使用的代码
+#![allow(unused_must_use)]
+#[warn(unused_mut)]
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::{copy, Read, Seek, Write};
-use std::path::Path as SPath;
+use std::path::{Path as SPath};
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 use std::vec::IntoIter;
 use axum::{response::IntoResponse, extract::{ContentLengthLimit, Multipart}, http::HeaderMap, Json};
 use axum::body::Body;
-use axum::extract::Query;
+use axum::extract::{Query, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocket};
 use axum::http::Response;
 use common::RespVO;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
 use rand::random;
+use tokio::sync::broadcast::Receiver;
 use walkdir::{DirEntry, WalkDir};
-
 use zip::write::FileOptions;
-use crate::entity::file_entity::FileEntity;
+use crate::entity::file_entity::{FileAppState, FileEntity, FileSocketData};
 use crate::entity::query::file_query::{CompressedFilesParam, RemoveFileQuery, UnCompressedFileParam};
 
 const SAVE_FILE_BASE_PATH: &str = ".\\file";
+
+//初始化全局socket线程管理器
+pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<FileAppState>>> = Lazy::new(||{
+  let app_state = FileAppState::new();
+  Mutex::new(app_state)
+});
 
 //获取文件列表
 pub async fn file_info(query:Query<HashMap<String,String>>) -> impl IntoResponse {
@@ -48,9 +62,6 @@ fn read_current_dir(path:&str)->Vec<FileEntity>{
           file_size = file.metadata().unwrap().len();
           update_date = file.metadata().unwrap().modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_millis();
           file_type = 1;
-          // println!("文件大小：{}", );
-          // println!("{}", );
-
         }
         let  file_name = file.file_name().to_str().unwrap().to_string();
         let file_entity = FileEntity::new(file_name, file_size, update_date, file_type);
@@ -237,12 +248,12 @@ pub async fn uncompressed_file(Json(param):Json<UnCompressedFileParam>)->impl In
   //异步解压文件
   tokio::spawn(async move{
     let mut zip_path = SAVE_FILE_BASE_PATH.to_string();
-    zip_path.push_str("/");
+    zip_path.push_str("\\");
     zip_path.push_str(param.path.as_str());
-    zip_path.push_str("/");
+    zip_path.push_str("\\");
     zip_path.push_str(param.zip_name.as_str());
     let mut compressed_path = SAVE_FILE_BASE_PATH.to_string();
-    compressed_path.push_str("/");
+    compressed_path.push_str("\\");
     compressed_path.push_str(param.path.as_str());
     extract(SPath::new(zip_path.as_str()),SPath::new(compressed_path.as_str()));
   });
@@ -262,6 +273,9 @@ fn compress_dir(src_dir: &SPath, target: &SPath, files:Vec<String>) {
   let dir = WalkDir::new(src_dir);
   let dir = dir.sort_by_file_name();
 
+  let compress_path = target.clone().parent().unwrap().to_str().unwrap();
+  let file_name = target.clone().file_name().unwrap().to_str().unwrap().to_string();
+
   //过滤掉其它文件
   let dir_entry:Vec<_> = dir.into_iter().filter_map(|i| i.ok()).collect();
   let mut new_dir_entry:Vec<_> = vec![];
@@ -275,7 +289,7 @@ fn compress_dir(src_dir: &SPath, target: &SPath, files:Vec<String>) {
     }
   }
 
-  let result = zip_dir(new_dir_entry.into_iter(),src_dir.to_str().unwrap(),zipfile);
+  let result = zip_dir(new_dir_entry.into_iter(),src_dir.to_str().unwrap(),zipfile,compress_path,file_name);
 
   if let Err(e) = result{
     println!("{}",e.to_string());
@@ -283,7 +297,7 @@ fn compress_dir(src_dir: &SPath, target: &SPath, files:Vec<String>) {
   }
 }
 
-fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T) -> zip::result::ZipResult<()>
+fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T, compress_path: &str,file_name:String) -> zip::result::ZipResult<()>
   where T: Write + Seek {
   let mut zip = zip::ZipWriter::new(writer);
   let options = FileOptions::default()
@@ -291,9 +305,12 @@ fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T) -> zip::result::Z
       .unix_permissions(0o755);//unix系统权限
 
   let mut buffer = Vec::new();
+  //偏移量
+  let mut index = 1;
+  let total = it.len();
+
   for entry in it {
     let path = entry.path();
-    // println!("{}",path.clone().file_name().unwrap().to_str().unwrap());
     //zip压缩一个文件时，会把它的全路径当成文件名(在下面的解压函数中打印文件名可知)
     //这里是去掉目录前缀
     let name = path.strip_prefix(SPath::new(prefix)).unwrap();
@@ -302,15 +319,91 @@ fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T) -> zip::result::Z
     // Some unzip tools unzip files with directory paths correctly, some do not!
     if path.is_file() {
       #[allow(deprecated)]
-      zip.start_file_from_path(name, options)?;
-      let mut f = File::open(path)?;
-      f.read_to_end(&mut buffer)?;
-      zip.write_all(&*buffer)?;
+      let start_file = zip.start_file_from_path(name, options);
+      if let Err(e) = start_file{
+        //发送失败消息到socket中
+        send_to_socket(
+          1,
+          index as u64,
+          total as u64,
+          compress_path.to_string(),
+          1,
+          file_name.clone());
+        println!("压缩文件：{}失败：{}", name.to_str().unwrap(), e.to_string());
+        continue;
+      }
+      let open_result = File::open(path);
+      if let Err(e) = open_result{
+        //发送失败消息到socket中
+        send_to_socket(
+          1,
+          index as u64,
+          total as u64,
+          compress_path.to_string(),
+          1,
+          file_name.clone());
+        println!("压缩文件：{}失败：{}", name.to_str().unwrap(), e.to_string());
+        continue;
+      }
+
+      let mut f = open_result.unwrap();
+      let read_result = f.read_to_end(&mut buffer);
+      if let Err(e) = read_result{
+        //发送失败消息到socket中
+        send_to_socket(
+          1,
+          index as u64,
+          total as u64,
+          compress_path.to_string(),
+          1,
+          file_name.clone());
+        println!("压缩文件：{}失败：{}", name.to_str().unwrap(), e.to_string());
+        continue;
+      }
+
+      let write_result = zip.write_all(&*buffer);
+      if let Err(e) = write_result {
+        //发送失败消息到socket中
+        send_to_socket(
+          1,
+          index as u64,
+          total as u64,
+          compress_path.to_string(),
+          1,
+          file_name.clone());
+        println!("压缩文件：{}失败：{}", name.to_str().unwrap(), e.to_string());
+        continue;
+      }
+
       buffer.clear();
     } else if name.as_os_str().len() != 0 {//目录
       #[allow(deprecated)]
-      zip.add_directory_from_path(name, options)?;
+      let add_result = zip.add_directory_from_path(name, options);
+      match add_result {
+        Ok(_) => {}
+        Err(e) => {
+          //发送失败消息到socket中
+          send_to_socket(
+            1,
+            index as u64,
+            total  as u64,
+            compress_path.to_string(),
+            1,
+            file_name.clone());
+          println!("压缩文件：{}失败：{}", name.to_str().unwrap(), e.to_string());
+          continue;
+        }
+      }
     }
+    //发送消息到socket中
+    send_to_socket(
+      1,
+      index as u64,
+      total as u64,
+      compress_path.to_string(),
+      0,
+      file_name.clone());
+    index = index +1;
   }
   zip.finish()?;
   Result::Ok(())
@@ -319,16 +412,20 @@ fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T) -> zip::result::Z
 
 ///解压
 /// test.zip文件解压到d:/test文件夹下
-///
-fn extract(test: &SPath, target: &SPath){
-  if let Err(e)=std::fs::File::open(&test){
+fn extract(test: &SPath, target: &SPath) {
+  if let Err(e) = std::fs::File::open(&test) {
     let mut msg = e.to_string();
     msg.push_str(test.to_str().unwrap());
-    println!("解压出错：{}",e);
+    println!("解压出错：{}", e);
   }
+  let file_name = test.clone().file_name().unwrap().to_str().unwrap().to_string();
   let zipfile = std::fs::File::open(&test).unwrap();
   let mut zip = zip::ZipArchive::new(zipfile).unwrap();
-
+  //socket 发送的路径
+  let send_path = target.clone();
+  //是否成功的标示
+  let mut handle_result = 0;
+  let total_number = zip.len();
   for i in 0..zip.len() {
     let mut file = zip.by_index(i).unwrap();
     if file.is_dir() {
@@ -343,10 +440,100 @@ fn extract(test: &SPath, target: &SPath){
         fs::File::open(file_path).unwrap()
       };
       let result = copy(&mut file, &mut target_file);
-      if let Err(e) = result{
-        println!("解压文件:{} 失败:{}",file.name(),e.to_string());
+      if let Err(e) = result {
+        handle_result = 1;
+        println!("解压文件:{} 失败:{}", file.name(), e.to_string());
       }
+
       // target_file.write_all(file.read_bytes().into());
+      //发送消息到socket中
+      send_to_socket(
+        0,
+        (i+1) as u64,
+        total_number as u64,
+        send_path.to_str().unwrap().to_string(),
+        handle_result,
+        file_name.clone());
+
+    }
+  }
+}
+
+/// 发送消息到socket
+fn send_to_socket(handle_type:u8,current_index:u64,total_number:u64,handle_path:String,handle_result: u8,file_name:String) {
+  if GLOBAL_SOCKET.lock().unwrap().user_set.lock().unwrap().len() > 0 {
+    let socket_data = FileSocketData::new(
+      handle_type,
+      current_index,
+      total_number,
+      handle_path,
+      handle_result,
+      file_name
+    );
+    //转json
+    let data = serde_json::to_string(&socket_data).unwrap();
+    GLOBAL_SOCKET.lock().unwrap().tx.send(String::from(data));
+  }
+}
+
+//使用websocket推送消息
+pub async fn websocket_handle(ws: WebSocketUpgrade,state:Arc<FileAppState>,args:Query<HashMap<String,String>>)->impl IntoResponse {
+    ws.on_upgrade(|socket| handle(socket,args,state))
+}
+
+async fn handle(mut socket: WebSocket,args:Query<HashMap<String,String>>,stat:Arc<FileAppState>){
+  if let None = args.0.get("id"){
+    let err =String::from("请传入ID");
+    let error:RespVO<String> = RespVO::from_error(err,String::from(""));
+    let msg = serde_json::to_string(&error).unwrap();
+    //发送错误提示
+    socket.send(Message::Text(msg))
+        .await;
+    return;
+  }
+  let id: &String = args.0.get("id").unwrap();
+
+  let ( sender,  receiver) = socket.split();
+
+  stat.user_set.lock().unwrap().insert(id.clone());
+
+  let mut read_tack = tokio::spawn(read(receiver,id.clone()));
+
+  let sd = stat.tx.subscribe();
+
+  //发送消息
+  let mut write_tack = tokio::spawn(write(sender, sd));
+
+  // 当发送消息失败或者离开页面， 阻塞方法
+  tokio::select! {
+         _ = (&mut write_tack) => read_tack.abort(),
+        _ = (&mut read_tack) => write_tack.abort(),
+    };
+
+}
+
+async fn read(mut receiver: SplitStream<WebSocket>,id:String) {
+  // ...
+  while let Some(Ok(message))=receiver.next().await{
+    match message {
+      Message::Text(msg) => {
+        println!("{}",msg);
+      }
+      Message::Close(c) => {
+        //移出socket
+        GLOBAL_SOCKET.lock().unwrap().user_set.lock().unwrap().remove(&*id);
+      }
+      _ => {
+        println!("其它消息")
+      }
+    }
+  }
+}
+
+async fn write(mut sender: SplitSink<WebSocket, Message>, mut sd: Receiver<String>) {
+  while let Ok(message) = sd.recv().await{
+    if sender.send(Message::Text(message)).await.is_err(){
+      break;
     }
   }
 }
