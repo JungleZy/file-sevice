@@ -19,14 +19,16 @@ use common::RespVO;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
-use rand::random;
 use tokio::sync::broadcast::Receiver;
 use walkdir::{DirEntry, WalkDir};
+use zip::result::ZipError;
 use zip::write::FileOptions;
 use crate::entity::file_entity::{FileAppState, FileEntity, FileSocketData};
 use crate::entity::query::file_query::{CompressedFilesParam, RemoveFileQuery, UnCompressedFileParam};
 
 const SAVE_FILE_BASE_PATH: &str = ".\\file";
+//服务管理目录
+const SERVER_MANAGE_SAVE_FILE_BASE_PATH:&str = ".\\serverManage";
 
 //初始化全局socket线程管理器
 pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<FileAppState>>> = Lazy::new(||{
@@ -37,7 +39,14 @@ pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<FileAppState>>> = Lazy::new(||{
 //获取文件列表
 pub async fn file_info(query:Query<HashMap<String,String>>) -> impl IntoResponse {
   let option = query.0.get("path");
+  let is_server_manage = query.0.get("isServerManage");
   let mut show_path = SAVE_FILE_BASE_PATH.to_string();
+  if is_server_manage.is_some() {
+    let flag = is_server_manage.unwrap();
+    if flag.eq("true") {
+      show_path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+    }
+  }
   if let Some(path) = option{
     show_path.push_str("//");
     show_path.push_str(path);
@@ -87,17 +96,25 @@ pub async fn file_upload(
     if let Some(field) = multipart.next_field().await.unwrap() {
       let name = field.name().unwrap().to_string();
       let file_name = field.file_name().unwrap().to_string();
+      println!("原始文件名称：{}",file_name);
       let content_type = field.content_type().unwrap().to_string();
       let data = field.bytes().await.unwrap();
       
       let current_path = headers.get("currentPath");
+      let is_server_manage = headers.get("isServerManage");
+
       let mut upload_path = "";
       if current_path.is_none() == false {
         upload_path = current_path.unwrap().to_str().unwrap();
       }
       let mut save_path =  SAVE_FILE_BASE_PATH.to_string();
+      if is_server_manage.is_none() == false {
+        save_path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+      }
       if upload_path != "" {
-        save_path = format!("{}/{}", SAVE_FILE_BASE_PATH, upload_path);
+        // save_path = format!("{}/{}", SAVE_FILE_BASE_PATH, upload_path);
+        save_path.push_str("\\");
+        save_path.push_str(upload_path);
       }
       // fs::create_dir_all(save_path.to_string()).unwrap();
       println!(
@@ -107,29 +124,9 @@ pub async fn file_upload(
           content_type,
           data.len()
       );
-      // if content_type.starts_with("image/") {
-        //根据文件类型生成随机文件名(出于安全考虑)
-        let rnd = (random::<f32>() * 1000000000 as f32) as i32;
-        //提取"/"的index位置
-        /*let index = content_type
-            .find("/")
-            .map(|i| i)
-            .unwrap_or(usize::max_value());*/
-        //文件扩展名
-        let ext_name;
-       /* if index != usize::max_value() {
-            ext_name = &content_type[index + 1..];
-        }*/
-        // 文件后缀.的位置
-        if let Some(ext_index) = file_name.rfind(".") {
-          ext_name = &file_name[ext_index+1..];
-        }else {
-          ext_name = "";
-        }
 
-
-      //最终保存在服务器上的文件名
-        let save_filename = format!("{}/{}.{}", save_path, rnd, ext_name);
+        //最终保存在服务器上的文件名
+        let save_filename = format!("{}/{}", save_path, file_name);
 
         let fp = fs::read_dir(save_path.to_string());
 
@@ -144,7 +141,7 @@ pub async fn file_upload(
             .await
             .map_err(|err| msg = err.to_string());
 
-        return RespVO::from(&format!("/{}/{}.{}",upload_path, rnd, ext_name)).resp_json();
+        return RespVO::from(&format!("/{}/{}",upload_path, file_name)).resp_json();
       // }
     }
     
@@ -155,6 +152,9 @@ pub async fn file_upload(
 //删除文件夹或文件 path:&str,is_file:bool
 pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoResponse{
   let mut full_path = SAVE_FILE_BASE_PATH.to_string();
+  if query.is_server_manage {
+      full_path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+  }
   full_path.push_str("/");
   full_path.push_str(query.path.as_str());
 
@@ -180,9 +180,10 @@ pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoR
 }
 
 
-//下载文件
+//下载文件 fileName = "下载路径" isServerManage = "是否是服务管理目录"
 pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl IntoResponse {
   let name = file_name.0.get("fileName");
+  let is_server_manage = file_name.0.get("isServerManage");
   if let None = name{
     return  RespVO::from_error(String::from("请传入下载文件路径名称"),String::from(" ")).resp_json();
   }
@@ -191,12 +192,14 @@ pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl Int
   if name.contains("/"){
     let v:Vec<&str> = name.rsplit("/").collect();
     let x = v.get(0).unwrap();
-    println!("{:?}",v);
     file_name.push_str(x);
   }else {
     file_name.push_str(name);
   }
   let mut file_path = String::from(SAVE_FILE_BASE_PATH.clone());
+  if is_server_manage.is_some() == true {
+    file_path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+  }
   file_path.push_str("/");
   file_path.push_str(name);
   let result = fs::read(file_path);
@@ -221,6 +224,9 @@ pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl Into
   //异步压缩
   tokio::spawn(async move{
     let mut path = SAVE_FILE_BASE_PATH.to_string();
+    if param.is_server_manage {
+      path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+    }
     path.push_str("\\");
     path.push_str(param.path.as_str());
 
@@ -248,6 +254,9 @@ pub async fn uncompressed_file(Json(param):Json<UnCompressedFileParam>)->impl In
   //异步解压文件
   tokio::spawn(async move{
     let mut zip_path = SAVE_FILE_BASE_PATH.to_string();
+    if param.is_server_manage {
+      zip_path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+    }
     zip_path.push_str("\\");
     zip_path.push_str(param.path.as_str());
     zip_path.push_str("\\");
@@ -288,6 +297,9 @@ fn compress_dir(src_dir: &SPath, target: &SPath, files:Vec<String>) {
       }
     }
   }
+  if new_dir_entry.len() == 0 {
+
+  }
 
   let result = zip_dir(new_dir_entry.into_iter(),src_dir.to_str().unwrap(),zipfile,compress_path,file_name);
 
@@ -308,6 +320,18 @@ fn zip_dir<T>(it: IntoIter<DirEntry>, prefix: &str, writer: T, compress_path: &s
   //偏移量
   let mut index = 1;
   let total = it.len();
+
+  if total == 0{
+    send_to_socket(
+      1,
+      0,
+      total as u64,
+      compress_path.to_string(),
+      1,
+      file_name.clone());
+    println!("没有可压缩的文件");
+    return Result::Err(ZipError::FileNotFound);
+  }
 
   for entry in it {
     let path = entry.path();
