@@ -34,3 +34,11 @@ pub struct UnCompressedFileParam{
     //是否是服务管理目录
     pub is_server_manage:bool,
 }
+
+/// 创建目录参数
+#[derive(Deserialize)]
+pub struct CreateDirParam{
+    pub path:String,
+    pub dir_name:String,
+    pub is_server_manage:bool,
+}

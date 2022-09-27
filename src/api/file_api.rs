@@ -11,7 +11,17 @@ use axum::{
   routing::{get_service},
 };
 use tower_http::{services::ServeDir};
-use crate::service::file_service::{file_info, file_upload, remove_dir_or_file, down_load_file, compressed_file, uncompressed_file,GLOBAL_SOCKET,websocket_handle};
+use crate::service::file_service::{
+    file_info,
+    file_upload,
+    remove_dir_or_file,
+    down_load_file,
+    compressed_file,
+    uncompressed_file,
+    GLOBAL_SOCKET,
+    websocket_handle,
+    create_dir,
+};
 
 const SAVE_FILE_BASE_PATH: &str = "./file";
 
@@ -19,6 +29,7 @@ pub fn init_router() -> Router {
   Router::new()
       .route("/info", get(file_info))
       .route("/upload", post(file_upload))
+      .route("/create",post(create_dir))
       .route("/remove", post(remove_dir_or_file))
       .route("/downFile",get(down_load_file))
       .route("/compressedFile",post(compressed_file))//压缩

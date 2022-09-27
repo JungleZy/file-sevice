@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::{copy, Read, Seek, Write};
-use std::path::{Path as SPath};
+use std::path::{Path as SPath, Path};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 use std::vec::IntoIter;
@@ -24,19 +24,19 @@ use walkdir::{DirEntry, WalkDir};
 use zip::result::ZipError;
 use zip::write::FileOptions;
 use crate::entity::file_entity::{FileAppState, FileEntity, FileSocketData};
-use crate::entity::query::file_query::{CompressedFilesParam, RemoveFileQuery, UnCompressedFileParam};
+use crate::entity::query::file_query::{CompressedFilesParam, CreateDirParam, RemoveFileQuery, UnCompressedFileParam};
 
 const SAVE_FILE_BASE_PATH: &str = ".\\file";
 //服务管理目录
 const SERVER_MANAGE_SAVE_FILE_BASE_PATH:&str = ".\\serverManage";
 
-//初始化全局socket线程管理器
+///初始化全局socket线程管理器
 pub static GLOBAL_SOCKET:Lazy<Mutex<Arc<FileAppState>>> = Lazy::new(||{
   let app_state = FileAppState::new();
   Mutex::new(app_state)
 });
 
-//获取文件列表
+///获取文件列表
 pub async fn file_info(query:Query<HashMap<String,String>>) -> impl IntoResponse {
   let option = query.0.get("path");
   let is_server_manage = query.0.get("isServerManage");
@@ -56,7 +56,7 @@ pub async fn file_info(query:Query<HashMap<String,String>>) -> impl IntoResponse
   return RespVO::from(&ret).resp_json();
 }
 
-//读取当前目录
+///读取当前目录
 fn read_current_dir(path:&str)->Vec<FileEntity>{
   let dir = fs::read_dir(path);
   let mut  ret:Vec<FileEntity> = Vec::new();
@@ -82,7 +82,7 @@ fn read_current_dir(path:&str)->Vec<FileEntity>{
   ret
 }
 
-//文件上传
+///文件上传
 pub async fn file_upload(
   ContentLengthLimit(mut multipart): ContentLengthLimit<
       Multipart,{
@@ -149,7 +149,7 @@ pub async fn file_upload(
 }
 
 
-//删除文件夹或文件 path:&str,is_file:bool
+///删除文件夹或文件 path:&str,is_file:bool
 pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoResponse{
   let mut full_path = SAVE_FILE_BASE_PATH.to_string();
   if query.is_server_manage {
@@ -180,7 +180,7 @@ pub async fn remove_dir_or_file(Json(query):Json<RemoveFileQuery>) -> impl IntoR
 }
 
 
-//下载文件 fileName = "下载路径" isServerManage = "是否是服务管理目录"
+///下载文件 fileName = "下载路径" isServerManage = "是否是服务管理目录"
 pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl IntoResponse {
   let name = file_name.0.get("fileName");
   let is_server_manage = file_name.0.get("isServerManage");
@@ -218,8 +218,41 @@ pub async fn down_load_file(file_name:Query<HashMap<String,String>>) -> impl Int
 
 }
 
+/// 创建文件夹
+pub async fn create_dir(Json(param):Json<CreateDirParam>)-> impl IntoResponse{
+  let mut path = SAVE_FILE_BASE_PATH.to_string();
+  if param.is_server_manage {
+    path = SERVER_MANAGE_SAVE_FILE_BASE_PATH.to_string();
+  }
+  path.push_str("\\");
+  if !param.path.eq(""){
+    path.push_str(param.path.as_str());
+    path.push_str("\\");
+  }
 
-//压缩文件
+  if param.dir_name.eq(""){
+    return RespVO::from_error(String::from("请传入文件名称"),String::from("")).resp_json();
+  }
+  path.push_str(param.dir_name.as_str());
+
+  //判断文件是否存在
+  let dir_path = Path::new(&path);
+  if dir_path.exists() {
+    return RespVO::from_error(String::from("文件夹已存在"),String::from("")).resp_json();
+  }
+  let result = fs::create_dir(dir_path);
+
+  if let Err(e) = result{
+    println!("创建文件夹：{}，失败:{}",dir_path.display(),e.to_string());
+    return RespVO::from_error(e.to_string(),String::from("")).resp_json();
+  }
+  let ok = String::from("ok");
+  return RespVO::from(&ok).resp_json();
+
+
+}
+
+///压缩文件
 pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl IntoResponse {
   //异步压缩
   tokio::spawn(async move{
@@ -248,7 +281,7 @@ pub async fn compressed_file(Json(param):Json<CompressedFilesParam>)-> impl Into
 }
 
 
-//解压
+///解压
 pub async fn uncompressed_file(Json(param):Json<UnCompressedFileParam>)->impl IntoResponse{
   let ok = String::from("正在解压");
   //异步解压文件
